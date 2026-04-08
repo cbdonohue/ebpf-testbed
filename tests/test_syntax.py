@@ -110,7 +110,7 @@ class BpfSyntaxTests(unittest.TestCase):
                     if line.startswith("\t"):
                         self.fail(f"{fname}:{i}: line starts with a tab")
 
-    @pytest.mark.skipif(
+    @unittest.skipIf(
         not os.path.exists('/sys/kernel/btf/vmlinux'),
         reason="bpftool/BTF not available in CI"
     )
