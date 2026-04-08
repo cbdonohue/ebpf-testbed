@@ -16,6 +16,7 @@ import os
 import sys
 import glob
 import unittest
+import pytest
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 SRC_DIR   = os.path.join(REPO_ROOT, "src")
@@ -109,6 +110,10 @@ class BpfSyntaxTests(unittest.TestCase):
                     if line.startswith("\t"):
                         self.fail(f"{fname}:{i}: line starts with a tab")
 
+    @pytest.mark.skipif(
+        not os.path.exists('/sys/kernel/btf/vmlinux'),
+        reason="bpftool/BTF not available in CI"
+    )
     def test_vmlinux_h_exists(self):
         """vmlinux.h must be present in src/common/ for CO-RE compilation."""
         vmlinux = os.path.join(SRC_DIR, "common", "vmlinux.h")
