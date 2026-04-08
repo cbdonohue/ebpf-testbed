@@ -1,0 +1,46 @@
+# C build artifacts
+*.o
+*.ll
+*.bc
+*.s
+*.a
+*.so
+
+# BCC temp files and compiled objects
+/tmp/bcc_*
+*.bpf.o
+*_bpf.o
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+.Python
+
+# Test/coverage artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+*.egg-info/
+dist/
+build/
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Kernel build artifacts (if building out-of-tree modules)
+*.mod.c
+*.mod.o
+Module.symvers
+modules.order

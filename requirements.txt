@@ -1,0 +1,16 @@
+# Python dependencies for ebpf-testbed userspace tools
+#
+# NOTE: The primary dependency (BCC / bcc) is a system package and cannot be
+# installed via pip on most distributions. Install it with your package manager:
+#
+#   Ubuntu/Debian:  sudo apt install python3-bpfcc bpfcc-tools
+#   Fedora:         sudo dnf install python3-bcc bcc-tools
+#   Arch:           sudo pacman -S python-bcc bcc-tools
+#
+# See docs/setup.md for full installation instructions.
+
+# Test runner
+pytest>=7.0
+
+# Optional: linting / formatting for Python files
+pycodestyle>=2.10
