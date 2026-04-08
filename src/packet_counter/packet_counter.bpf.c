@@ -4,15 +4,16 @@
 // Uses BPF_MAP_TYPE_ARRAY indexed by IP protocol number (0-255).
 // Always returns XDP_PASS so packets continue normally.
 //
-// Rewritten from BCC-style (BPF_ARRAY macro) to libbpf-style BTF maps.
+// Upgraded from BCC-style headers to libbpf CO-RE with vmlinux.h.
+// BPF_MAP_TYPE_ARRAY is kept (correct for XDP per-CPU counters).
 
-#include <linux/bpf.h>
+#include "vmlinux.h"
 #include <bpf/bpf_helpers.h>
-#include <linux/if_ether.h>
-#include <linux/ip.h>
-#include <linux/in.h>
+#include <bpf/bpf_endian.h>
 
-// libbpf-style map definition (replaces BCC BPF_ARRAY macro)
+#define ETH_P_IP    0x0800
+
+// libbpf CO-RE map definition (replaces BCC BPF_ARRAY macro)
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
     __type(key, __u32);
@@ -32,7 +33,7 @@ int xdp_packet_counter(struct xdp_md *ctx)
         return XDP_PASS;
 
     // Only handle IPv4
-    if (eth->h_proto != __constant_htons(ETH_P_IP))
+    if (bpf_ntohs(eth->h_proto) != ETH_P_IP)
         return XDP_PASS;
 
     // Parse IP header
@@ -45,9 +46,8 @@ int xdp_packet_counter(struct xdp_md *ctx)
         return XDP_PASS;
 
     __u64 *count = bpf_map_lookup_elem(&proto_count, &proto);
-    if (count) {
+    if (count)
         __sync_fetch_and_add(count, 1);
-    }
 
     return XDP_PASS;
 }

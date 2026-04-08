@@ -1,43 +1,40 @@
 // SPDX-License-Identifier: GPL-2.0
 // syscall_tracer.bpf.c — Tracepoint on sys_enter_execve
 //
-// Captures process name (comm) and PID for every execve() call
-// and emits the data via bpf_printk.
+// Captures process name (comm), PID, and filename for every execve() call
+// and emits the data via BPF ring buffer.
 //
-// Rewritten from BCC-style (TRACEPOINT_PROBE, BPF_PERF_OUTPUT macros)
-// to libbpf-style with SEC("tracepoint/...") and standard helpers.
-//
-// BPF_PERF_OUTPUT(exec_events) — replaced with bpf_printk output below.
+// Upgraded from BCC-style (TRACEPOINT_PROBE macros, bpf_printk)
+// to libbpf CO-RE with BPF_MAP_TYPE_RINGBUF.
 
-#include <linux/bpf.h>
+#include "vmlinux.h"
 #include <bpf/bpf_helpers.h>
+#include <bpf/bpf_tracing.h>
+#include <bpf/bpf_core_read.h>
 
-#define TASK_COMM_LEN 16
-
-// Minimal tracepoint context for sys_enter_execve
-// Matches the format in /sys/kernel/debug/tracing/events/syscalls/sys_enter_execve/format
-struct sys_enter_execve_args {
-    __u64 pad;         // common fields (8 bytes)
-    const char *filename;
-    const char * const *argv;
-    const char * const *envp;
+struct event {
+    __u32 pid;
+    char comm[16];
+    char filename[64];
 };
 
-// sys_enter_execve tracepoint — replaces TRACEPOINT_PROBE(syscalls, sys_enter_execve)
+struct {
+    __uint(type, BPF_MAP_TYPE_RINGBUF);
+    __uint(max_entries, 256 * 1024);
+} events SEC(".maps");
+
 SEC("tracepoint/syscalls/sys_enter_execve")
-int tracepoint__syscalls__sys_enter_execve(struct sys_enter_execve_args *ctx)
+int trace_execve(struct trace_event_raw_sys_enter *ctx)
 {
-    __u64 pid_tgid = bpf_get_current_pid_tgid();
-    __u32 pid      = (__u32)(pid_tgid & 0xFFFFFFFF);
-    __u32 tgid     = (__u32)(pid_tgid >> 32);
+    struct event *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
+    if (!e)
+        return 0;
 
-    char comm[TASK_COMM_LEN] = {};
-    bpf_get_current_comm(comm, sizeof(comm));
-
-    char filename[64] = {};
-    bpf_probe_read_user_str(filename, sizeof(filename), ctx->filename);
-
-    bpf_printk("execve: pid=%u comm=%s file=%s\n", tgid, comm, filename);
+    e->pid = bpf_get_current_pid_tgid() >> 32;
+    bpf_get_current_comm(&e->comm, sizeof(e->comm));
+    bpf_probe_read_user_str(&e->filename, sizeof(e->filename),
+                            (void *)ctx->args[0]);
+    bpf_ringbuf_submit(e, 0);
     return 0;
 }
 

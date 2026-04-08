@@ -5,7 +5,8 @@ test_loaders.py — Smoke-test that Python loader scripts import cleanly.
 Validates:
   - Each loader module can be imported without errors
   - Required top-level names (main, BPF_SRC) are present
-  - BPF_SRC paths resolve to existing files
+  - BPF_SRC paths resolve to existing .bpf.c files
+  - Loaders do NOT import bcc (CO-RE architecture uses ctypes + bpftool)
 
 Requires: Python 3.6+ (no BCC or root needed for these checks).
 """
@@ -28,36 +29,11 @@ def _load_module_from_path(name, path):
     """Load a module from a file path without executing it as __main__."""
     spec   = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
-    # Patch out the BCC import so we don't need it installed
-    sys.modules.setdefault("bcc", _FakeBCC())
     try:
         spec.loader.exec_module(module)
     except SystemExit:
         pass  # Some loaders call sys.exit on import-time checks
     return module
-
-
-class _FakeBCC:
-    """Minimal stub so `from bcc import BPF` doesn't fail."""
-    class BPF:
-        XDP = 0
-        def __init__(self, **kwargs): pass
-        def load_func(self, *a, **kw): return None
-        def attach_xdp(self, *a, **kw): pass
-        def remove_xdp(self, *a, **kw): pass
-        def trace_print(self): pass
-        def __getitem__(self, key): return _FakeMap()
-
-    def __getattr__(self, name):
-        return lambda *a, **kw: None
-
-
-class _FakeMap:
-    def open_perf_buffer(self, *a, **kw): pass
-    def perf_buffer_poll(self): pass
-    def print_log2_hist(self, *a): pass
-    def clear(self): pass
-    def __getitem__(self, key): return type("V", (), {"value": 0})()
 
 
 class LoaderSmokeTests(unittest.TestCase):
@@ -86,6 +62,32 @@ class LoaderSmokeTests(unittest.TestCase):
             self.assertTrue(
                 callable(getattr(module, "main", None)),
                 f"{name}: no callable 'main' found"
+            )
+
+    def test_no_bcc_import_in_loaders(self):
+        """CO-RE loaders must not import BCC; they use ctypes + bpftool."""
+        for name, relpath in LOADER_INFO:
+            path = os.path.join(REPO_ROOT, relpath)
+            with open(path) as f:
+                src = f.read()
+            self.assertNotIn(
+                "from bcc import", src,
+                f"{name}: loader still imports BCC — should use ctypes/libbpf"
+            )
+            self.assertNotIn(
+                "import bcc", src,
+                f"{name}: loader still imports BCC — should use ctypes/libbpf"
+            )
+
+    def test_loaders_use_ctypes(self):
+        """CO-RE loaders should use ctypes for struct definitions."""
+        for name, relpath in LOADER_INFO:
+            path = os.path.join(REPO_ROOT, relpath)
+            with open(path) as f:
+                src = f.read()
+            self.assertIn(
+                "ctypes", src,
+                f"{name}: loader does not use ctypes (expected for CO-RE)"
             )
 
 

@@ -6,10 +6,12 @@
 *.a
 *.so
 
-# BCC temp files and compiled objects
-/tmp/bcc_*
+# BPF compiled objects
 *.bpf.o
 *_bpf.o
+
+# vmlinux.h is machine-specific — regenerate with bpftool
+src/common/vmlinux.h
 
 # Python cache
 __pycache__/

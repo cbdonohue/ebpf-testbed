@@ -1,19 +1,24 @@
 // SPDX-License-Identifier: GPL-2.0
-// latency.bpf.c — Block I/O latency histogram
+// latency.bpf.c — Block I/O latency histogram with ring buffer events
 //
-// Attaches kprobes to blk_mq_start_request and blk_mq_end_request.
-// Records per-request latency (ns) in a log2 histogram array.
+// Attaches kprobes to blk_account_io_start and blk_account_io_done.
+// Records per-request latency (ns) in a log2 histogram array AND
+// emits individual latency events via a ring buffer.
 //
-// Rewritten from BCC-style (BPF_HASH, BPF_HISTOGRAM macros) to libbpf-style.
-// BPF_HISTOGRAM(io_latency_ns) — replaced with BPF_MAP_TYPE_ARRAY below.
-// blk_account_io_start / blk_account_io_done — available as kprobe targets
-// via the kprobe/blk_account_io_start and kretprobe/blk_account_io_done sections.
+// Upgraded from BCC-style (BPF_HASH, histogram macros) to libbpf CO-RE
+// with vmlinux.h and BPF_MAP_TYPE_RINGBUF for event streaming.
 
-#include <linux/bpf.h>
+#include "vmlinux.h"
 #include <bpf/bpf_helpers.h>
+#include <bpf/bpf_tracing.h>
+#include <bpf/bpf_core_read.h>
+
+struct latency_event {
+    __u64 delta_ns;
+    __u32 slot;
+};
 
 // Map: u64 request pointer -> start timestamp (ns)
-// Replaces BCC BPF_HASH(start_ts, struct request *, u64)
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __type(key, __u64);
@@ -22,7 +27,6 @@ struct {
 } start_ts SEC(".maps");
 
 // Log2 histogram: 64 buckets for latency in nanoseconds
-// Replaces BCC BPF_HISTOGRAM(io_latency_ns, u64)
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
     __type(key, __u32);
@@ -30,7 +34,12 @@ struct {
     __uint(max_entries, 64);
 } io_latency_ns SEC(".maps");
 
-// Compute log2 of a 64-bit value (returns 0 for 0)
+// Ring buffer for streaming individual latency events to userspace
+struct {
+    __uint(type, BPF_MAP_TYPE_RINGBUF);
+    __uint(max_entries, 256 * 1024);
+} events SEC(".maps");
+
 static __always_inline __u32 log2_u64(__u64 v)
 {
     __u32 r = 0;
@@ -43,7 +52,6 @@ static __always_inline __u32 log2_u64(__u64 v)
     return r;
 }
 
-// kprobe on blk_account_io_start — record start timestamp keyed by ctx pointer
 SEC("kprobe/blk_account_io_start")
 int kprobe__blk_account_io_start(void *ctx)
 {
@@ -53,7 +61,6 @@ int kprobe__blk_account_io_start(void *ctx)
     return 0;
 }
 
-// kretprobe on blk_account_io_done — compute delta and update histogram
 SEC("kretprobe/blk_account_io_done")
 int kretprobe__blk_account_io_done(void *ctx)
 {
@@ -70,8 +77,14 @@ int kretprobe__blk_account_io_done(void *ctx)
         slot = 63;
 
     __u64 *bucket = bpf_map_lookup_elem(&io_latency_ns, &slot);
-    if (bucket) {
+    if (bucket)
         __sync_fetch_and_add(bucket, 1);
+
+    struct latency_event *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
+    if (e) {
+        e->delta_ns = delta;
+        e->slot     = slot;
+        bpf_ringbuf_submit(e, 0);
     }
     return 0;
 }

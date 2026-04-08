@@ -4,69 +4,83 @@
 
 | Requirement | Minimum | Notes |
 |---|---|---|
-| Kernel version | ≥ 5.4 | BTF + CO-RE support; 5.15+ recommended |
+| Kernel version | ≥ 5.8 | Ring buffer (`BPF_MAP_TYPE_RINGBUF`) requires 5.8+ |
 | `CONFIG_BPF=y` | Required | Core eBPF support |
 | `CONFIG_BPF_SYSCALL=y` | Required | Allows loading programs via `bpf()` syscall |
 | `CONFIG_BPF_JIT=y` | Recommended | JIT compilation for performance |
 | `CONFIG_KPROBES=y` | Required | kprobe attachment |
 | `CONFIG_XDP_SOCKETS=y` | Required for XDP | AF_XDP sockets |
-| `CONFIG_DEBUG_INFO_BTF=y` | Recommended | CO-RE / BTF type info |
+| `CONFIG_DEBUG_INFO_BTF=y` | **Required** | CO-RE / BTF type info for vmlinux.h and relocations |
 | `CONFIG_HAVE_EBPF_JIT=y` | Recommended | Hardware JIT |
 
 ### Check Your Kernel
 
 ```bash
 uname -r
-# Should be 5.4+
+# Should be 5.8+
 
-# Verify BPF is enabled
-grep -E "CONFIG_BPF|CONFIG_KPROBES|CONFIG_XDP" /boot/config-$(uname -r)
+# Verify BPF and BTF are enabled
+grep -E "CONFIG_BPF|CONFIG_KPROBES|CONFIG_DEBUG_INFO_BTF" /boot/config-$(uname -r)
+
+# Verify BTF is exported at runtime
+ls -lh /sys/kernel/btf/vmlinux
 ```
 
 ---
 
-## BCC Installation
+## libbpf + bpftool Installation (CO-RE — no BCC needed)
 
-### Ubuntu 22.04 (Jammy)
-
-```bash
-sudo apt-get update
-sudo apt-get install -y bpfcc-tools libbpfcc libbpfcc-dev \
-    python3-bpfcc linux-headers-$(uname -r) \
-    clang llvm libclang-dev
-```
-
-### Ubuntu 24.04 (Noble)
+### Ubuntu 22.04 / 24.04
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y bpfcc-tools libbpfcc libbpfcc-dev \
-    python3-bpfcc linux-headers-$(uname -r) \
-    clang-17 llvm-17 libclang-17-dev
-# Create symlinks if needed
-sudo ln -sf /usr/bin/clang-17 /usr/local/bin/clang
-sudo ln -sf /usr/bin/llvm-config-17 /usr/local/bin/llvm-config
+sudo apt-get install -y \
+    libbpf-dev \
+    linux-tools-$(uname -r) \
+    clang llvm \
+    linux-headers-$(uname -r)
 ```
 
-### From Source (latest BCC — any distro)
+> `linux-tools-$(uname -r)` provides `bpftool`.
 
-Useful when the distro package is out of date:
+### Generate vmlinux.h (once per machine)
+
+`vmlinux.h` contains all kernel type definitions exported via BTF. It must be generated on the target machine:
 
 ```bash
-sudo apt-get install -y cmake python3-dev bison flex \
-    libelf-dev libfl-dev libssl-dev \
-    clang llvm llvm-dev libclang-dev
+BPFTOOL=$(ls /usr/lib/linux-tools/*/bpftool 2>/dev/null | head -1)
+# or: BPFTOOL=/usr/lib/linux-tools/$(uname -r)/bpftool
 
-git clone https://github.com/iovisor/bcc.git
-mkdir bcc/build && cd bcc/build
-cmake .. -DCMAKE_INSTALL_PREFIX=/usr
-make -j$(nproc)
-sudo make install
+sudo $BPFTOOL btf dump file /sys/kernel/btf/vmlinux format c > src/common/vmlinux.h
+wc -l src/common/vmlinux.h  # should be >50,000 lines for a typical kernel
+```
+
+This file is in `.gitignore` (kernel-specific) — regenerate it on each machine.
+
+### Verify clang can compile BPF
+
+```bash
+clang --version    # should be ≥ 10, ideally 14+
+
+# Test compile
+clang -target bpf -O2 -g \
+    -I src/common \
+    -I /usr/include/x86_64-linux-gnu \
+    -c src/hello_world/hello.bpf.c -o /tmp/hello.bpf.o && echo "✅ OK"
 ```
 
 ---
 
 ## Python Dependencies
+
+No BCC required. The loaders use only the Python standard library (`ctypes`, `subprocess`, `mmap`, `struct`) plus `libbpf.so.1` from `libbpf-dev`:
+
+```bash
+# Confirm libbpf.so is present
+ls /usr/lib/x86_64-linux-gnu/libbpf.so*
+```
+
+Install any additional Python test dependencies:
 
 ```bash
 pip install -r requirements.txt
@@ -77,55 +91,64 @@ pip install -r requirements.txt
 ## Verifying the Setup
 
 ```bash
-# List available BCC tools (should show many programs)
-ls /usr/share/bcc/tools/
+# Check bpftool works
+bpftool version
 
-# Quick sanity check — trace open() calls for 5 seconds
-sudo opensnoop-bpfcc -d 5
+# Check BTF is available
+bpftool btf dump file /sys/kernel/btf/vmlinux | head -5
 
-# Check kernel BTF is available (needed for CO-RE)
-ls /sys/kernel/btf/vmlinux
+# Run static tests (no root needed)
+python3 -m pytest tests/ -v
+
+# Run the hello world loader
+cd src/hello_world
+sudo python3 hello.py
 ```
 
 ---
 
 ## Tested Configurations
 
-| Distro | Kernel | BCC Version | Status |
+| Distro | Kernel | libbpf | Status |
 |---|---|---|---|
-| Ubuntu 22.04 LTS | 5.15.x | 0.25 (apt) | ✅ Tested |
-| Ubuntu 24.04 LTS | 6.8.x | 0.30 (apt) | ✅ Tested |
-| Debian 12 (Bookworm) | 6.1.x | 0.25 (apt) | ✅ Tested |
-| Fedora 39 | 6.5.x | 0.27 (dnf) | ✅ Tested |
-| Arch Linux | rolling | latest (pacman) | ✅ Tested |
+| Ubuntu 24.04 LTS | 6.8.x | 1.3.0 (apt) | ✅ Tested |
+| Ubuntu 22.04 LTS | 5.15.x | 0.8.0 (apt) | ✅ Tested |
+| Ubuntu (AWS) | 6.17.x | 1.3.0 (apt) | ✅ Tested |
 
 ---
 
 ## Common Issues
 
+### `vmlinux.h: No such file or directory`
+
+Run the `bpftool btf dump` command above to generate it. It must be created on the target machine.
+
 ### `cannot open BPF object file`
 
-Make sure you're running as **root** (`sudo`) and that kernel headers match your running kernel:
+Make sure you're running as **root** (`sudo`).
 
-```bash
-sudo apt-get install linux-headers-$(uname -r)
-```
+### `failed to find kernel BTF` / BTF not exported
 
-### `failed to find kernel BTF`
-
-BTF must be compiled into the kernel. On Ubuntu:
+BTF must be compiled into the kernel (`CONFIG_DEBUG_INFO_BTF=y`). On Ubuntu:
 
 ```bash
 grep CONFIG_DEBUG_INFO_BTF /boot/config-$(uname -r)
 # Should output: CONFIG_DEBUG_INFO_BTF=y
 ```
 
-If not, install a BTF-enabled kernel or compile one with `CONFIG_DEBUG_INFO_BTF=y`.
+All Ubuntu kernels ≥ 5.15 include BTF. If not present, install a newer kernel package.
 
-### XDP attach fails
+### XDP attach fails on `lo` or virtual interfaces
 
-Some virtual interfaces (like `lo`) don't support native XDP. Try `veth` pairs or a physical interface. Alternatively, use the generic XDP mode:
+Some interfaces don't support native XDP. Try a physical or `veth` interface. Use generic XDP mode:
 
 ```bash
-# In packet_counter.py, change attach_xdp flag from 0 to BPF.XDP_FLAGS_SKB_MODE
+ip link set dev lo xdp obj packet_counter.bpf.o section xdp skb
+```
+
+### `bpftool: command not found`
+
+```bash
+sudo apt-get install linux-tools-$(uname -r)
+# or check: ls /usr/lib/linux-tools/*/bpftool
 ```

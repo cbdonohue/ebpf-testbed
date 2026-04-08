@@ -1,11 +1,13 @@
 # Python dependencies for ebpf-testbed userspace tools
 #
-# NOTE: The primary dependency (BCC / bcc) is a system package and cannot be
-# installed via pip on most distributions. Install it with your package manager:
+# This project uses libbpf CO-RE — no BCC required.
+# System dependencies (install with apt):
 #
-#   Ubuntu/Debian:  sudo apt install python3-bpfcc bpfcc-tools
-#   Fedora:         sudo dnf install python3-bcc bcc-tools
-#   Arch:           sudo pacman -S python-bcc bcc-tools
+#   sudo apt install libbpf-dev linux-tools-$(uname -r) clang llvm
+#
+# After installing system deps, generate vmlinux.h:
+#   BPFTOOL=$(ls /usr/lib/linux-tools/*/bpftool | head -1)
+#   sudo $BPFTOOL btf dump file /sys/kernel/btf/vmlinux format c > src/common/vmlinux.h
 #
 # See docs/setup.md for full installation instructions.
 
