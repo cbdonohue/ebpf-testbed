@@ -55,6 +55,14 @@ make test
 
 ---
 
+## Architecture
+
+![eBPF Testbed Architecture](docs/architecture.png)
+
+The diagram shows the full stack: Python BCC loaders in userspace compile `.bpf.c` programs via clang/llvm into eBPF bytecode, which passes through the kernel verifier before being attached to hook points (kprobe, XDP, tracepoint). Data flows back to userspace via BPF maps (shared kernel ↔ userspace memory).
+
+---
+
 ## Programs
 
 | Program | Type | What It Does |
